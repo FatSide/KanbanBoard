@@ -1,10 +1,10 @@
+# kanban_app.py
 import customtkinter as ctk
 from tkinter import colorchooser
-import json
 import os
 import sys
-from typing import Any, Callable, Dict, List, Tuple
-
+from typing import Any, Dict, Tuple, List
+from kanban_model import KanbanModel
 
 def resource_path(relative_path):
     """
@@ -20,91 +20,6 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
-
-# Observer Pattern Interfaces
-class Subject:
-    def __init__(self):
-        self._observers: List[Callable[[str, Any], None]] = []
-
-    def attach(self, observer: Callable[[str, Any], None]):
-        if observer not in self._observers:
-            self._observers.append(observer)
-
-    def detach(self, observer: Callable[[str, Any], None]):
-        if observer in self._observers:
-            self._observers.remove(observer)
-
-    def notify(self, event: str, data: Any = None):
-        for observer in self._observers:
-            observer(event, data)
-
-# Model
-class KanbanModel(Subject):
-    def __init__(self, save_file: str, column_titles: List[str]):
-        super().__init__()
-        self.column_titles = column_titles
-        self.columns: Dict[str, List[Dict[str, Any]]] = {title: [] for title in column_titles}
-        self.save_file = save_file
-        self.load_stickers()
-
-    def add_sticker(self, column: str, text: str, bg_color: str = "gray75"):
-        if column in self.columns:
-            sticker = {"text": text, "bg_color": bg_color}
-            self.columns[column].append(sticker)
-            self.notify("add_sticker", {"column": column, "sticker": sticker})
-            self.save_stickers()
-
-    def delete_sticker(self, column: str, sticker_index: int):
-        if column in self.columns and 0 <= sticker_index < len(self.columns[column]):
-            del self.columns[column][sticker_index]
-            self.notify("delete_sticker", {"column": column, "sticker_index": sticker_index})
-            self.save_stickers()
-
-    def move_sticker(self, from_column: str, to_column: str, sticker_index: int):
-        if (
-            from_column in self.columns and
-            to_column in self.columns and
-            0 <= sticker_index < len(self.columns[from_column])
-        ):
-            sticker = self.columns[from_column].pop(sticker_index)
-            self.columns[to_column].append(sticker)
-            self.notify("move_sticker", {
-                "from_column": from_column,
-                "to_column": to_column,
-                "sticker": sticker
-            })
-            self.save_stickers()
-
-    def edit_sticker_bg(self, column: str, sticker_index: int, new_bg: str):
-        if column in self.columns and 0 <= sticker_index < len(self.columns[column]):
-            self.columns[column][sticker_index]["bg_color"] = new_bg
-            self.notify("edit_sticker_bg", {
-                "column": column,
-                "sticker_index": sticker_index,
-                "new_bg": new_bg
-            })
-            self.save_stickers()
-
-    def load_stickers(self):
-        if not os.path.exists(self.save_file):
-            self.save_stickers()  # Create empty file
-            return
-        try:
-            with open(self.save_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for title, stickers in data.items():
-                if title in self.columns:
-                    self.columns[title].extend(stickers)
-            self.notify("load_stickers")
-        except Exception as e:
-            print(f"Error loading stickers: {e}")
-
-    def save_stickers(self):
-        try:
-            with open(self.save_file, "w", encoding="utf-8") as f:
-                json.dump(self.columns, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(f"Error saving stickers: {e}")
 
 # View and Controller
 class KanbanApp(ctk.CTk):
@@ -125,7 +40,7 @@ class KanbanApp(ctk.CTk):
         self.columns: Dict[str, ColumnView] = {}
 
         # Текущий выбранный стикер
-        self.selected_sticker: Tuple[str, int] = (None, None)  # (column, index)
+        self.selected_sticker: Tuple[str, int] = (None, None)  # (state, index)
 
         # Основной макет
         self.main_frame = ctk.CTkFrame(self)
@@ -151,13 +66,13 @@ class KanbanApp(ctk.CTk):
         # Кнопки перемещения стикера
         self.move_left_button = ctk.CTkButton(
             input_frame, text="←", width=40, height=40,
-            command=lambda: self.move_task(-1)
+            command=lambda: self.move_task("left")
         )
         self.move_left_button.pack(side="left", padx=(0, 5), pady=10)
 
         self.move_right_button = ctk.CTkButton(
             input_frame, text="→", width=40, height=40,
-            command=lambda: self.move_task(1)
+            command=lambda: self.move_task("right")
         )
         self.move_right_button.pack(side="left", padx=(5, 0), pady=10)
 
@@ -166,32 +81,32 @@ class KanbanApp(ctk.CTk):
 
     def load_initial_stickers(self):
         """Загружает начальные стикеры из модели."""
-        for column, stickers in self.model.columns.items():
+        for state, stickers in self.model.columns.items():
             for sticker in stickers:
-                self.columns[column].add_sticker_view(sticker["text"], sticker["bg_color"])
+                self.columns[state].add_sticker_view(sticker["text"], sticker["bg_color"])
 
     def on_model_event(self, event: str, data: Any):
         """Обработчик событий модели."""
         if event == "add_sticker":
-            column = data["column"]
+            state = data["state"]
             sticker = data["sticker"]
-            self.columns[column].add_sticker_view(sticker["text"], sticker["bg_color"])
+            self.columns[state].add_sticker_view(sticker["text"], sticker["bg_color"])
         elif event == "delete_sticker":
-            column = data["column"]
+            state = data["state"]
             index = data["sticker_index"]
-            self.columns[column].delete_sticker_view(index)
-            # Reset selection if needed
-            if self.selected_sticker == (column, index):
+            self.columns[state].delete_sticker_view(index)
+            # Сбросить выбор, если необходимо
+            if self.selected_sticker == (state, index):
                 self.selected_sticker = (None, None)
         elif event == "move_sticker":
-            # Rebuild all columns
+            # Перестраиваем все колонки
             self.refresh_all_columns()
             self.selected_sticker = (None, None)
         elif event == "edit_sticker_bg":
-            column = data["column"]
+            state = data["state"]
             index = data["sticker_index"]
             new_bg = data["new_bg"]
-            self.columns[column].update_sticker_bg(index, new_bg)
+            self.columns[state].update_sticker_bg(index, new_bg)
         elif event == "load_stickers":
             self.load_initial_stickers()
 
@@ -208,30 +123,27 @@ class KanbanApp(ctk.CTk):
             self.model.add_sticker("Queue", task_text, bg_color="gray75")
             self.task_input.delete(0, "end")
 
-    def select_sticker(self, column: str, index: int):
+    def select_sticker(self, state: str, index: int):
         """Выбирает стикер."""
         # Снимаем выделение с предыдущего стикера, если есть
         if self.selected_sticker != (None, None):
-            prev_column, prev_index = self.selected_sticker
-            self.columns[prev_column].deselect_sticker(prev_index)
+            prev_state, prev_index = self.selected_sticker
+            self.columns[prev_state].deselect_sticker(prev_index)
 
         # Выделяем новый стикер
-        self.selected_sticker = (column, index)
-        self.columns[column].select_sticker(index)
+        self.selected_sticker = (state, index)
+        self.columns[state].select_sticker(index)
 
-    def move_task(self, direction: int):
+    def move_task(self, direction: str):
         """Перемещает выбранный стикер в соседнюю колонку."""
         if self.selected_sticker == (None, None):
             return  # Нет выбранного стикера
 
-        column, index = self.selected_sticker
-        current_idx = self.column_titles.index(column)
-        target_idx = current_idx + direction
+        state, index = self.selected_sticker
+        self.model.move_sticker(state, index, direction)
 
-        if 0 <= target_idx < len(self.column_titles):
-            target_column = self.column_titles[target_idx]
-            self.model.move_sticker(column, target_column, index)
-            self.selected_sticker = (None, None)
+    def run(self):
+        self.mainloop()
 
 # Column View
 class ColumnView(ctk.CTkFrame):
@@ -292,9 +204,9 @@ class ColumnView(ctk.CTkFrame):
 
 # Sticker View
 class StickerView(ctk.CTkFrame):
-    def __init__(self, parent, column: str, index: int, text: str, bg_color: str, app: KanbanApp):
+    def __init__(self, parent, state: str, index: int, text: str, bg_color: str, app: KanbanApp):
         super().__init__(parent, corner_radius=8, fg_color=bg_color, border_width=2, border_color=bg_color)
-        self.column = column
+        self.state = state
         self.index = index
         self.app = app
 
@@ -325,7 +237,7 @@ class StickerView(ctk.CTkFrame):
 
     def on_click(self, event):
         """Обработчик клика на стикере."""
-        self.app.select_sticker(self.column, self.index)
+        self.app.select_sticker(self.state, self.index)
 
     def select(self):
         """Выделяет стикер."""
@@ -341,11 +253,11 @@ class StickerView(ctk.CTkFrame):
         if color_code and color_code[1]:
             new_bg = color_code[1]
             self.configure(fg_color=new_bg, border_color=new_bg)
-            self.app.model.edit_sticker_bg(self.column, self.index, new_bg)
+            self.app.model.edit_sticker_bg(self.state, self.index, new_bg)
 
     def delete(self):
         """Удаляет стикер."""
-        self.app.model.delete_sticker(self.column, self.index)
+        self.app.model.delete_sticker(self.state, self.index)
 
     def update_bg(self, new_bg: str):
         """Обновляет цвет фона стикера."""
@@ -358,4 +270,4 @@ if __name__ == "__main__":
 
     model = KanbanModel(SAVE_FILE, COLUMN_TITLES)
     app = KanbanApp(model)
-    app.mainloop()
+    app.run()
